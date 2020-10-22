@@ -32,14 +32,17 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PipedOutputStream;
+import java.io.PipedInputStream;
 import java.util.Vector;
+import java.net.InetSocketAddress;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.openadaptor.core.exception.ConnectionException;
 
-import sun.net.TelnetInputStream;
 import sun.net.ftp.FtpClient;
+import sun.net.ftp.FtpClientProvider;
 
 /**
  * This component will provide basic File Transfer Protocol (FTP) connunication to allow the adaptor to GET a file from
@@ -82,9 +85,9 @@ public class SunFTPConnection extends AbstractFTPLibrary {
     log.debug("Connecting to " + hostName + " on port " + port);
 
     try {
-      _ftpClient = new FtpClient(hostName, port);
+      _ftpClient = FtpClient.create(new InetSocketAddress(hostName, port));
       _connected = true;
-    } catch (IOException e) {
+    } catch (Exception e) {
       throw new ConnectionException("Failed to create SunFTP Client: " + e.getMessage(), this);
     }
 
@@ -116,11 +119,11 @@ public class SunFTPConnection extends AbstractFTPLibrary {
     log.debug("Logging in " + userName);
 
     try {
-      _ftpClient.login(userName, password);
+      _ftpClient.login(userName, password.toCharArray());
 
       _loggedIn = true;
       log.debug(userName + " logged in");
-    } catch (IOException e) {
+    } catch (Exception e) {
       close();
       throw new ConnectionException("Failed to login to SunFTP Server: " + e.getMessage(), this);
     }
@@ -128,13 +131,13 @@ public class SunFTPConnection extends AbstractFTPLibrary {
     // set the file transfer mode
     try {
       if (binaryTransfer) {
-        _ftpClient.binary();
+        _ftpClient.setType(FtpClient.TransferType.BINARY);
         log.debug("Binary transfer mode set");
       } else {
-        _ftpClient.ascii();
+        _ftpClient.setType(FtpClient.TransferType.ASCII);
         log.debug("ASCII transfer mode set");
       }
-    } catch (IOException e) {
+    } catch (Exception e) {
       close();
       throw new ConnectionException("Failed to set " + (binaryTransfer ? "binary" : "ascii") + " transfer mode: "
           + e.getMessage(), this);
@@ -163,13 +166,13 @@ public class SunFTPConnection extends AbstractFTPLibrary {
     checkLoggedIn();
 
     try {
-      in = _ftpClient.get(fileName);
+      in = _ftpClient.getFileStream(fileName);
       if (in == null) {
         log.warn("Empty file retrieved");
         return null;
       }
       log.debug("SunFTP input transfer stream created for " + fileName);
-    } catch (IOException e) {
+    } catch (Exception e) {
       close();
       throw new ConnectionException("Cannot open SunFTP stream:" + e.getMessage(), this);
     }
@@ -195,20 +198,22 @@ public class SunFTPConnection extends AbstractFTPLibrary {
    *           created (eg. does not have permission)
    */
   public OutputStream put(String fileName) {
-    OutputStream out;
+    OutputStream out=null;
 
     log.debug("put() called: directory=" + getCurrentWorkingDirectory() + "; file=" + fileName);
 
     checkLoggedIn();
 
     try {
-      out = _ftpClient.put(fileName);
+    PipedInputStream in = new PipedInputStream();
+    _ftpClient.putFile(fileName, in, false);
+    out = new PipedOutputStream(in);
       if (out == null) {
         log.warn("Error creating file");
         return null;
       }
       log.debug("SunFTP output transfer stream created for " + fileName);
-    } catch (IOException e) {
+    } catch (Exception e) {
       close();
       throw new ConnectionException("Cannot open SunFTP stream:" + e.getMessage(), this);
     }
@@ -233,16 +238,18 @@ public class SunFTPConnection extends AbstractFTPLibrary {
    *           created (eg. does not have permission)
    */
   public OutputStream append(String fileName) {
-    OutputStream _out;
+    OutputStream _out = null;
 
     log.debug("append() called: directory=" + getCurrentWorkingDirectory() + "; file=" + fileName);
 
     checkLoggedIn();
 
     try {
-      _out = _ftpClient.append(fileName);
+    PipedInputStream in = new PipedInputStream();
+    _ftpClient.appendFile(fileName, in);
+    _out = new PipedOutputStream(in);
       log.debug("SunFTP output transfer stream created for " + fileName);
-    } catch (IOException e) {
+    } catch (Exception e) {
       close();
       throw new ConnectionException("Cannot open SunFTP stream:" + e.getMessage(), this);
     }
@@ -258,7 +265,7 @@ public class SunFTPConnection extends AbstractFTPLibrary {
    */
   public void close() throws ConnectionException {
     try {
-      _ftpClient.closeServer();
+      _ftpClient.close();
       _connected = false;
       log.debug("SunFTP connection closed");
     } catch (IOException e) {
@@ -283,7 +290,7 @@ public class SunFTPConnection extends AbstractFTPLibrary {
     // attempt to change to the supplied directory. Throws an exception if the
     // directory does not exist
     try {
-      _ftpClient.cd(dirName);
+      _ftpClient.changeDirectory(dirName);
       _isPresent = true;
     } catch (Exception e) {
       // do nothing as this means that the directory does not exist and the _isPresent
@@ -307,12 +314,12 @@ public class SunFTPConnection extends AbstractFTPLibrary {
 
     // attempt to delete the supplied file from the remote server
     try {
-      _ftpClient.sendServer("del " + fileName + "\r\n");
+      _ftpClient.deleteFile(fileName);
 
       // hmmm ... if we don't read the response then the listener bugs out
       // after retrieving and deleting the first file and then trying to
       // get the second file in the list. Don't know why this fixes it.
-      _ftpClient.readServerResponse();
+      _ftpClient.getLastResponseString();
     } catch (Exception e) {
       close();
       throw new ConnectionException("Failed to delete " + fileName + ": " + e.getMessage(), this);
@@ -347,7 +354,7 @@ public class SunFTPConnection extends AbstractFTPLibrary {
     checkLoggedIn();
 
     try {
-      TelnetInputStream in = _ftpClient.nameList(filePattern);
+      InputStream in = _ftpClient.nameList(filePattern);
 
       BufferedReader rdr = new BufferedReader(new InputStreamReader(in));
       String fileName;
@@ -393,10 +400,10 @@ public class SunFTPConnection extends AbstractFTPLibrary {
       }
 
       // set up the working directory
-      _ftpClient.cd(directoryName);
+      _ftpClient.changeDirectory(directoryName);
       log.debug("Working directory set to: " + directoryName);
 
-    } catch (IOException e) {
+    } catch (Exception e) {
       close();
       throw new ConnectionException("Failed to change direcotries to [" + directoryName + "]: " + e.getMessage(), this);
     }
@@ -408,8 +415,8 @@ public class SunFTPConnection extends AbstractFTPLibrary {
    */
   public String getCurrentWorkingDirectory() {
     try {
-      return _ftpClient.pwd();
-    } catch (IOException e) {
+      return _ftpClient.getWorkingDirectory();
+    } catch (Exception e) {
       return null;
     }
   }

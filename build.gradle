@@ -599,9 +599,9 @@ task dependsJar(type: Jar, description: 'Create openadaptor-depends.jar from 3rd
                 zipTree(it).matching({ include "${name}" }).each { file << ("${it.text}\r\n") }
             }
 
-            into(path) {
-                from file
-            }
+//            into(path) {
+//                from file
+//            }
 
         }
 
@@ -654,9 +654,9 @@ task dependsJar(type: Jar, description: 'Create openadaptor-depends.jar from 3rd
                         entryName = entryName.substring(i)
                     }
                     // Include the files into the depends jar
-                    into("${zipName}/${entryPath}") {
-                        from f.file
-                    }
+//                    into("${zipName}/${entryPath}") {
+//                        from f.file
+//                    }
                 }
             }
         }
